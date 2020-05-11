@@ -1,0 +1,199 @@
+---
+title: "Herfindahl-Hirschman Index of world export by product"
+author: "Mitsuo Shiota"
+date: "2020/5/11"
+output: 
+  github_document:
+    toc: TRUE
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Updated: `r Sys.Date()`
+
+## Motivation
+
+I was asked to calculate something like Herfindahl-Hirschman Index, which shows how the production of a certain goods concentrates in a few areas, and to confirm the global supply chains have become fragile due to rising concentration of production.
+
+I didn't know what Herfindahl-Hirschman Index is, so searched by google, and got [this page](https://www.investopedia.com/terms/h/hhi.asp), which says it is a commonly accepted measure of concentration. In my case, I have to calculate the share of each area, square, and sum up for each product. If one area produces 100 percent, then HHI is 10000, which is maximum.
+
+```{r library, include=FALSE}
+library(tidyverse)
+```
+
+
+## Download export value data by area and product group
+
+I could not find production data , but could find export value data in [WTO Data](https://timeseries.wto.org/). If export is concentrated in some area, probably production is also concentrated in that area.
+
+From the left side column in [WTO Data](https://timeseries.wto.org/), in "Indicators" I chose  "International trade statistics" > "Merchandise trade values" > "Merchandise trade exports by product group and destination - annual (Million US Dollars), all top selections. In "Reporting Economies" I chose "world" and all "individual economies" by using "Filter". In "Products / Sectors" I chose "Manufacturers" including sub-items. In "Partner Economies" I chose "world". In "Year" I chose every 5 year from 1990 and most recent 2018. Then I pushed "Apply" button, and finally downloaded a csv file.
+
+
+## Read csv file
+
+I read the downloaded csv file, and drop irrelevant columns.
+
+```{r read}
+data_raw <- read_csv("data/WtoData_20200510015454.csv")
+
+wto_export <- data_raw %>% 
+  select(`Reporting Economy`, `Product/Sector`, Year, Value)
+
+names(wto_export) <- c("exporter", "product", "year", "value")
+```
+
+## Check sum
+
+Considering German reunification in 1990 and Hong Kong return to China in 1997, I remove double counts in individual economies. However, there remain more than 5 percent differences in some years in "Clothing" and "Textiles". I decide to ignore the differences.
+
+```{r check_sum}
+exports <- wto_export %>% 
+  filter(exporter != "World") %>% 
+  # remove double count
+  filter(!(exporter %in% 
+             c(
+               "German Democratic Republic",
+               "Germany, Federal Republic of",
+               "Ethiopia (+ Eritrea)"
+             )
+  )) %>% 
+  # Hong Kong returned to China in 1997
+  filter(!(exporter == "Hong Kong, China" & year >= 2000))
+
+world <- wto_export %>% 
+  filter(exporter == "World") %>% 
+  select(-exporter)
+
+total <- exports %>% 
+  group_by(product, year) %>% 
+  summarize(total = sum(value))
+
+large_diff <- total %>% 
+  left_join(world, by = c("product", "year")) %>% 
+  mutate(
+    diff = value - total,
+    diff_percent = diff / value * 100
+    ) %>% 
+  filter(abs(diff_percent) > 5)
+
+large_diff
+```
+
+## Calculate Herfindahl-Hirschman Index
+
+I calculate shares by using the total of individual economies as a denominator, square them, and sum up by product to get HHI.
+
+```{r hhi}
+exports2 <- exports %>% 
+  left_join(total, by = c("product", "year")) %>% 
+  mutate(
+    share = value / total * 100,
+    share_sq = share^2)
+
+export_hhi <- exports2 %>% 
+  group_by(product, year) %>% 
+  summarize(
+    hhi = sum(share_sq)
+  ) %>% 
+  left_join(world, by = c("product", "year")) %>% 
+  drop_na(value) %>% 
+  select(-value)
+```
+
+## Draw charts of HHI by product
+
+"Manufactures" are the total of manufactured goods. Its HHI declined up to 2005, climbed to 2015, and dipped a bit in 2018, probably due to the movement of Chinese shares.
+
+```{r chart_hhi_class1, fig.width=8, fig.height=6}
+class1 <- export_hhi %>% 
+  filter(year == 1990)
+
+class1_product <- unique(class1$product)
+
+class2_product <- setdiff(unique(export_hhi$product), class1_product)
+
+export_hhi %>% 
+  filter(product %in% class1_product) %>% 
+  ggplot(aes(year, hhi, color = fct_reorder2(product, year, hhi))) +
+  geom_line() +
+  labs(color = "Product")
+
+```
+
+
+"Textiles", "Office and telecom equipment" and "Clothing" have especially high HHI. Who are they? You can see Chinese dominance contribute to high HHI below. Note that "value" is in million US dollars, and "share" is in percent.
+
+```{r high_scorer1}
+exports2 %>% 
+  filter(product == "Textiles", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Office and telecom equipment", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Clothing", year == 2018) %>% 
+  arrange(desc(share))
+
+```
+
+"Telecommunications equipment", "Electronic data processing and office equipment" and "Integrated circuits and electronic components" are parts of "Office and telecom equipment" above. "Pharmaceuticals" is a part of "Chemicals" above.
+
+```{r chart_hhi_class2, fig.width=8, fig.height=6}
+export_hhi %>% 
+  filter(product %in% class2_product) %>% 
+  ggplot(aes(year, hhi, color = fct_reorder2(product, year, hhi))) +
+  geom_line() +
+  labs(color = "Product")
+```
+
+I guess "Telecommunications equipment" are mainly smart phones, and "Electronic data processing and office equipment" are mainly note PC. High share scorers in 2018 are:
+
+```{r high_scorer2}
+exports2 %>% 
+  filter(product == "Telecommunications equipment", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Electronic data processing and office equipment", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Integrated circuits and electronic components", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Pharmaceuticals", year == 2018) %>% 
+  arrange(desc(share))
+
+exports2 %>% 
+  filter(product == "Transport equipment", year == 2018) %>% 
+  arrange(desc(share))
+
+```
+
+
+## Draw charts of shares of main exporters in "Manufactures"
+
+I think Chinese relentless rise in export share in "Manufactures" is the main reason of down and up of HHI. Chinese rise first contributed to HHI decrease upto 2005 when Germany, the United States and China equally share the exports. After that, Chinese rise contributed to HHI increase, as it became dominant.
+
+Chinese rise is partially driven by international division of labor by process. For example, smart phones are assembled in China and exported to the world from China, but their main parts are imported from South Korea, Taiwan, Japan, and others to China. International division of labor by process leads to faster growth of intermediate goods trade than final goods trade, which is shown in 2019 METI international trade white book [(Japanese)](https://www.meti.go.jp/report/tsuhaku2019/2019honbun/i2110000.html).
+
+```{r chart_mfg_export_share}
+exports2 %>% 
+  filter(product == "Manufactures") %>% 
+  filter(exporter %in% c("United States of America", "China",
+                         "Germany", "Japan", 
+                         "Korea, Republic of")) %>% 
+  ggplot(aes(year, share, color = fct_reorder2(exporter, year, share))) +
+  geom_line() +
+  labs(color = "Exporter")
+
+```
+
+EOL
